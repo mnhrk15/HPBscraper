@@ -126,25 +126,52 @@ def main() -> None:
                     exporter = ExcelExporter()
                     exporter.export_salon_data(salon_details, str(output_path))
 
+                    # スクレイピング完了時の処理
+                    logging.info(f"スクレイピング完了: 成功={len(salon_details)}件, エラー=0件")
+                    
+                    # 処理状態を更新
+                    update_processing_state(
+                        is_processing=False,
+                        status_message=f"スクレイピング完了: 成功={len(salon_details)}件, エラー=0件",
+                        progress=100,
+                        is_complete=True,
+                        salon_data=salon_details
+                    )
+
+                    # スクレイピング結果の表示
+                    st.subheader("スクレイピング結果")
+                    display_salon_data(salon_details)  # サロンデータ表示 (app_ui.py)
+
+                    # ダウンロードボタンを表示
+                    if salon_details:  # サロンデータが存在する場合のみ表示
+                        excel_bytes, file_name = ExcelExporter.get_excel_bytes(salon_details)
+                        st.download_button(
+                            label="Excelファイルをダウンロード",
+                            data=excel_bytes,
+                            file_name=file_name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+
+                    # スクレイパーの状態をリセット
+                    st.session_state.scraper.reset()
+
                     # 完了メッセージ
                     st.success(f"""
                         スクレイピングが完了しました！
                         - 対象エリア: {selected_prefecture} {selected_area}
                         - 取得件数: {len(salon_details):,}件
-                        - 保存先: output/{filename}
                     """)
 
-                    # スクレイピング結果の表示
-                    st.subheader("スクレイピング結果")
-                    display_salon_data(salon_details) # サロンデータ表示 (app_ui.py)
-
-                    # スクレイパーの状態をリセット
-                    st.session_state.scraper.reset()
-
-                    # 処理状態をリセット (app_state_manager.py)
-                    reset_processing_state() # 状態管理moduleの関数を使用
-
-
+                    # 処理状態をリセット（ただし、サロンデータと完了フラグは保持）
+                    update_processing_state(
+                        is_processing=False,
+                        should_stop=False,
+                        status_message="",
+                        progress=0,
+                        progress_info={},
+                        is_complete=True,  # 完了フラグは保持
+                        salon_data=salon_details  # サロンデータは保持
+                    )
                 else:
                     st.warning("サロンが見つかりませんでした。")
         except Exception as e:
