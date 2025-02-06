@@ -15,7 +15,7 @@ from datetime import datetime
 
 # モジュールをimport
 from app_ui import (
-    display_app_header, display_sidebar_exit_button, display_search_filters,
+    display_app_header, display_search_filters,
     display_statistics, display_area_selector, display_main_ui,
     display_status_message, display_salon_data, display_progress_ui
 )
@@ -61,9 +61,6 @@ def main() -> None:
         search_query = display_search_filters() # 検索フィルターUI表示
         selected_prefecture, selected_area, filtered_data = process_area_data_and_render_selector(is_processing) # エリアデータ処理、エリアセレクターUI表示
         display_statistics(load_area_data(), filtered_data) # 統計情報UI表示
-
-    # サイドバーのUI要素表示 (終了ボタン)
-    display_sidebar_exit_button()
 
     # メインエリアのUI要素表示 (使い方、開始/停止ボタン、進捗表示、ステータスメッセージ)
     display_status_message(status_message, should_stop, is_processing) # ステータスメッセージ表示
