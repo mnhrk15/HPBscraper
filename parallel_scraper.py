@@ -24,9 +24,14 @@ class ParallelScraper:
         self._success_count = 0
         self._error_count = 0
         self._start_time = None
-        self._executor = None
+        self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)  # 初期化時にThreadPoolExecutorを作成
         self._progress_callback = None
         self._is_processing = False
+
+    def __del__(self):
+        """デストラクタ: リソースのクリーンアップを行う"""
+        if self._executor:
+            self._executor.shutdown(wait=False)  # 実行中のタスクを待たずにシャットダウン
 
     def stop(self):
         """スクレイピング処理を中断"""
@@ -173,50 +178,57 @@ class ParallelScraper:
                 time.sleep(2 ** attempt)  # 指数バックオフ
 
     def scrape_salon_details_parallel(self, salon_urls: List[str]) -> List[Dict]:
-        """サロン情報を並列で取得"""
+        """
+        サロン情報を並列で取得します。
+
+        Args:
+            salon_urls: サロンURLのリスト
+
+        Returns:
+            List[Dict]: 取得したサロン情報のリスト
+        """
         if not salon_urls:
             return []
 
+        self._is_processing = True
+        self._total_urls = len(salon_urls)
+        self._processed_urls = 0
+        self._success_count = 0
+        self._error_count = 0
+        self._start_time = time.time()
+        
+        results = []
+        scraper = BeautyScraper()
+
         try:
-            self.reset()
-            self._is_processing = True
-            self._start_time = time.time()
-            self._total_urls = len(salon_urls)
-            
-            results = []
-            scraper = BeautyScraper()
-
-            if self._progress_callback:
-                self._progress_callback(self._get_progress_info())
-
             with tqdm(total=len(salon_urls), desc="サロン情報取得") as progress_bar:
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as self._executor:
-                    futures = [
-                        self._executor.submit(self._scrape_salon_with_retry, scraper, url)
-                        for url in salon_urls
-                    ]
-                    
-                    for future in as_completed(futures):
-                        if self._should_stop():
-                            logging.info("処理が中断されました")
-                            break
+                # 既存のexecutorを使用
+                futures = {
+                    self._executor.submit(
+                        self._scrape_salon_with_retry, scraper, url
+                    ): url for url in salon_urls
+                }
 
-                        try:
-                            data = future.result()
-                            if data:
-                                results.append(data)
-                                self._update_progress(progress_bar, success=True)
-                            else:
-                                self._update_progress(progress_bar, success=False)
-                        except Exception as e:
-                            logging.error(f"並列処理中にエラーが発生: {str(e)}")
+                for future in as_completed(futures):
+                    if self._should_stop():
+                        break
+
+                    try:
+                        result = future.result()
+                        if result:
+                            results.append(result)
+                            self._update_progress(progress_bar, success=True)
+                        else:
                             self._update_progress(progress_bar, success=False)
+                    except Exception as e:
+                        logging.error(f"Error processing {futures[future]}: {str(e)}")
+                        self._update_progress(progress_bar, success=False)
 
-            return results
         finally:
             self._is_processing = False
-            if self._progress_callback:
-                self._progress_callback(self._get_progress_info())
+            self._stop_event.clear()
+
+        return results
 
 class RateLimiter:
     """リクエストのレート制限を管理するクラス"""
