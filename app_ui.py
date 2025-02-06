@@ -291,16 +291,8 @@ def display_app_header() -> None:
     """
     アプリケーションのヘッダーを表示します。
     """
-    st.title("HPBスクレイピングアプリ")
-
-def display_sidebar_exit_button() -> None:
-    """
-    サイドバーにアプリ終了ボタンを表示します。
-    """
-    if st.sidebar.button(
-        "アプリを終了",
-        type="primary",
-        use_container_width=True
-    ):
-        import os
-        os._exit(0)
+    st.title("サロンスクレイピングアプリ")
+    st.markdown("""
+        このアプリは、指定されたエリアの美容室情報を自動的に収集します。
+        サイドバーからエリアを選択し、「スクレイピング開始」ボタンをクリックしてください。
+    """)
