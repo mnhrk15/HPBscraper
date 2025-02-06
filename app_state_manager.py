@@ -6,7 +6,7 @@ app_state_manager.py - Streamlitアプリケーションの状態管理モジュ
 """
 
 import streamlit as st
-from typing import Optional, Dict, Any, Callable # Optional, Dict, Any, Callable をインポート
+from typing import Optional, Dict, Any, Callable, List # Optional, Dict, Any, Callable, List をインポート
 
 # 定数定義
 PROGRESS_INITIAL_STATE = {
@@ -14,7 +14,9 @@ PROGRESS_INITIAL_STATE = {
     'should_stop': False,
     'status_message': '',
     'progress': 0,
-    'progress_info': {}
+    'progress_info': {},
+    'is_complete': False,
+    'salon_data': None
 }
 
 def init_session_state(on_search_change_callback: Callable, handle_start_callback: Callable, handle_stop_callback: Callable, reset_processing_state_callback: Callable) -> None:
@@ -71,7 +73,9 @@ def update_processing_state(
     should_stop: Optional[bool] = None,
     status_message: Optional[str] = None,
     progress: Optional[float] = None,
-    progress_info: Optional[Dict[str, Any]] = None
+    progress_info: Optional[Dict[str, Any]] = None,
+    is_complete: Optional[bool] = None,
+    salon_data: Optional[List[Any]] = None
 ) -> None:
     """
     処理状態を更新します。
@@ -82,6 +86,8 @@ def update_processing_state(
         status_message: ステータスメッセージ
         progress: 進捗率（0-100）
         progress_info: 詳細な進捗情報
+        is_complete: 完了フラグ
+        salon_data: サロンデータ
     """
     if 'processing_state' not in st.session_state:
         st.session_state.processing_state = PROGRESS_INITIAL_STATE
@@ -96,6 +102,10 @@ def update_processing_state(
         st.session_state.processing_state['progress'] = progress
     if progress_info is not None:
         st.session_state.processing_state['progress_info'] = progress_info
+    if is_complete is not None:
+        st.session_state.processing_state['is_complete'] = is_complete
+    if salon_data is not None:
+        st.session_state.processing_state['salon_data'] = salon_data
 
 def reset_processing_state() -> None:
     """
