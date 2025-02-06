@@ -77,3 +77,6 @@ scraping.log
 
 # area_structured.csv
 area_structured.csv
+
+# Streamlit secrets
+.streamlit/
