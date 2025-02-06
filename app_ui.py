@@ -9,6 +9,7 @@ import streamlit as st
 from typing import Dict, List, Tuple, Any
 import pandas as pd
 
+
 def display_area_selector(area_data: Dict[str, Any], is_processing: bool) -> Tuple[str, str]:
     """
     階層的なエリア選択UIを表示します。

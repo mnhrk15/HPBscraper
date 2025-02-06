@@ -12,6 +12,7 @@ from parallel_scraper import ParallelScraper
 from excel_exporter import ExcelExporter
 from pathlib import Path
 from datetime import datetime
+import hmac
 
 # モジュールをimport
 from app_ui import (
@@ -24,12 +25,45 @@ from app_area_handler import load_area_data, process_area_data_and_render_select
 from app_progress_handler import progress_callback # 進捗処理module
 from app_action_handlers import handle_start, handle_stop, on_search_change # アクションハンドラーmodule
 
+# ページ設定
+st.set_page_config(
+    page_title="HPBスクレイピングアプリ",
+    page_icon="./assets/icon.ico",
+    layout="wide"
+)
+
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store the password.
+        else:
+            st.session_state["password_correct"] = False
+
+    # Return True if the password is validated.
+    if st.session_state.get("password_correct", False):
+        return True
+
+    # Show input for password.
+    st.text_input(
+        "Password", type="password", on_change=password_entered, key="password"
+    )
+    if "password_correct" in st.session_state:
+        st.error("😕 Password incorrect")
+    return False
 
 def main() -> None:
     """
     アプリケーションのメインエントリーポイント。
     モジュール化されたStreamlitアプリケーションの各機能を呼び出し、連携させます。
     """
+    # パスワード認証のチェック
+    if not check_password():
+        st.stop()  # Do not continue if check_password is not True.
+
     # セッションステートの初期化 (コールバック関数を登録)
     init_session_state(
         on_search_change_callback=on_search_change,
