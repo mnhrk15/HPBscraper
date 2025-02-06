@@ -9,6 +9,7 @@ import streamlit as st
 from typing import Dict, List, Tuple, Any
 import pandas as pd
 
+
 def display_area_selector(area_data: Dict[str, Any], is_processing: bool) -> Tuple[str, str]:
     """
     階層的なエリア選択UIを表示します。
@@ -290,11 +291,6 @@ def display_app_header() -> None:
     """
     アプリケーションのヘッダーを表示します。
     """
-    st.set_page_config(
-        page_title="HPBスクレイピングアプリ",
-        page_icon="./assets/icon.ico",
-        layout="wide"
-    )
     st.title("HPBスクレイピングアプリ")
 
 def display_sidebar_exit_button() -> None:
