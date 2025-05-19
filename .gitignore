@@ -79,4 +79,4 @@ scraping.log
 area_structured.csv
 
 # Streamlit secrets
-.streamlit/
+.streamlit/secrets.toml

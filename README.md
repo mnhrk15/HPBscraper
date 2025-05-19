@@ -13,6 +13,8 @@
 ## ファイル構成
 
 ```
+├── .streamlit/              # Streamlit設定ディレクトリ
+│   └── secrets.toml.example # secrets.toml のサンプルファイル
 ├── area.csv                 # スクレイピング対象エリアのリスト (CSVファイル)
 ├── app.py                   # Streamlit Webアプリケーションのメインスクリプト
 ├── app_action_handlers.py    # Streamlitアプリケーションのアクションハンドラーモジュール
@@ -73,7 +75,7 @@ prefecture,area,url,estimated_salons,add_button_clicked
 python area_processor.py
 ```
 
-実行後、`area_structured.csv` が生成されます。このファイルにサロン数が追記されています。`area.csv` を `area_structured.csv` に**上書き**してください。
+実行後、`area_structured.csv` が生成されます。このファイルにサロン数が追記されています。`area.csv` を `area_structured.csv` で**上書き**してください。
 
 **注意**: `area_processor.py` はウェブサイトにアクセスしてサロン数を取得するため、実行に時間がかかります。また、ウェブサイトの構造変更により正常に動作しなくなる可能性があります。処理内容は以下の通りです。
 
@@ -134,6 +136,17 @@ Webブラウザが自動的に開き、アプリケーションが起動しま�
     *   **Excelファイルをダウンロード (ダウンロードボタン)**: スクレイピング結果をExcelファイル (`.xlsx`) としてダウンロードできます。ファイル名には、都道府県名、エリア名、実行日時が含まれます。`output` ディレクトリにも自動的に保存されます。
     *   **完了メッセージ**: スクレイピング完了後に、対象エリア、取得件数を含む完了メッセージが表示されます。
 
+**オプション: パスワード認証の設定**
+
+アプリケーションにパスワード認証を追加したい場合は、プロジェクトルートに `.streamlit` ディレクトリが自動で作成されます（存在しない場合）。その中に `secrets.toml` ファイルを配置してください（`.streamlit/secrets.toml.example`をコピーして作成できます）。
+`secrets.toml` には以下のように記述します。
+
+```toml
+password = "あなたのパスワード"
+```
+これにより、アプリケーション起動時にパスワード入力が求められるようになります。
+実際の `secrets.toml` ファイルは `.gitignore` によりGitの管理対象外となっているため、リポジトリに誤ってパスワードをコミットする心配はありません。
+
 ### 2. コマンドラインアプリケーションの実行 (`main.py`)
 
 以下のコマンドでコマンドラインアプリケーションを実行します。
@@ -153,6 +166,7 @@ python main.py
 *   **`app.py`**:
     *   Streamlit Webアプリケーションのエントリーポイント。
     *   セッション状態の初期化、UIの構築、スクレイピング処理の制御、イベントハンドリング (ボタンクリック、検索クエリ変更など) を行います。
+    *   オプションで `.streamlit/secrets.toml` ファイルを用いたパスワード認証機能を提供します (`check_password` 関数)。
     *   `app_ui.py`, `app_state_manager.py`, `app_progress_handler.py`, `app_action_handlers.py`, `app_area_handler.py` などのモジュールを連携させ、アプリケーション全体の機能を統合します。
     *   スクレイピング実行、進捗表示、エラーハンドリング、Excel出力、結果表示などの主要な処理フローを実装します。
 *   **`app_action_handlers.py`**:
@@ -268,9 +282,7 @@ python main.py
         *   `scrape_salon_details_parallel`: サロンURLのリスト (`List[str]`) を引数に取り、それらのURLからサロン情報を並列でスクレイピングします。`ThreadPoolExecutor` を使用して並列処理を行い、`_scrape_salon_with_retry` メソッドをワーカーとして実行します。進捗バー (`tqdm`) で進捗状況を表示し、進捗更新 (`_update_progress`) を行います。中断 (`_should_stop`) が必要な場合は、スクレイピングを中断します。スクレイピング結果のサロン情報リスト (`List[Dict]`) を返します。エラー発生時はログ (`logging.error`) にエラー内容を出力します。処理開始前に処理中フラグ (`_is_processing`) を `True` に設定し、終了時に `False` に戻します。
     *   `RateLimiter` クラス:
         *   `__init__`: `RateLimiter` クラスのコンストラクタです。レート制限値 (`rate_limit`) (1秒あたりのリクエスト数、`float`) を引数に取り、レート制限値を設定します。最後にリクエストを送信した時刻 (`last_request_time`) を初期化します。ロック (`threading.Lock`) を初期化します。レート制限値は最小値 (`0.1秒`) を保証します。
-        *   `wait`: レート制限に従って待機します。前回の
-
-リクエストからの経過時間 (`elapsed`) を計算し、必要な待機時間 (`wait_time`) を算出し、`time.sleep` で待機します。ロック (`_lock`) を使用してスレッドセーフな待機処理を行います。待機後、最後にリクエストを送信した時刻 (`last_request_time`) を現在時刻で更新します。
+        *   `wait`: レート制限に従って待機します。前回のリクエストからの経過時間 (`elapsed`) を計算し、必要な待機時間 (`wait_time`) を算出し、`time.sleep` で待機します。ロック (`_lock`) を使用してスレッドセーフな待機処理を行います。待機後、最後にリクエストを送信した時刻 (`last_request_time`) を現在時刻で更新します。
 *   **`scraper.py`**:
     *   個別のWebページ (サロン詳細ページ、電話番号ページ、エリアページ) から情報をスクレイピングする機能を提供するモジュールです。`BeautyScraper` クラス (静的メソッドのみ) を定義します。
     *   `BeautyScraper` クラス:
@@ -300,6 +312,7 @@ python main.py
 *   **ウェブサイト構造の変更**: ホットペッパービューティーのウェブサイト構造が変更された場合、スクレイピングツールが動作しなくなる可能性があります。定期的に動作確認を行い、必要に応じて `config.py` の CSSセレクター (`PHONE_SELECTORS`, `SALON_SELECTORS`) を修正してください。
 *   **エラーログの確認**: エラーが発生した場合は、ログファイル (`scraping.log`, `area_processing.log`) を確認し、原因を特定してください。
 *   **個人情報の取り扱い**: スクレイピングによって電話番号などの個人情報を取得する可能性があります。個人情報保護法などの関連法規を遵守し、適切に取り扱ってください。
+*   **`secrets.toml` の管理**: Streamlitアプリケーションのパスワード認証を使用する場合、`.streamlit/secrets.toml` ファイルに実際のパスワードを記述します。このファイルは `.gitignore` によってGitの管理対象外となっていますが、誤って公開しないよう注意してください。サンプルとして `.streamlit/secrets.toml.example` が用意されています。
 *   **CAPTCHA**: ウェブサイトがCAPTCHAを導入した場合、自動スクレイピングは困難になります。
 
 ## 既知の問題点
