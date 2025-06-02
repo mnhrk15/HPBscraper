@@ -7,12 +7,16 @@ app.py - モジュール化されたStreamlit美容室情報スクレイピン�
 
 import streamlit as st
 import logging
+import hmac
+import os
+from pathlib import Path
+from datetime import datetime
+
+# モジュールのインポート
 from logging_setup import setup_logging
 from parallel_scraper import ParallelScraper
 from excel_exporter import ExcelExporter
-from pathlib import Path
-from datetime import datetime
-import hmac
+from secret_manager import get_secret, validate_secrets, is_development_environment
 
 # モジュールをimport
 from app_ui import (
@@ -26,33 +30,70 @@ from app_progress_handler import progress_callback # 進捗処理module
 from app_action_handlers import handle_start, handle_stop, on_search_change # アクションハンドラーmodule
 
 # ページ設定
+# アイコンパスを相対パスから絶対パスに変換
+_icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.ico")
+_icon = _icon_path if os.path.exists(_icon_path) else None
+
 st.set_page_config(
     page_title="HPBスクレイピングアプリ",
-    page_icon="./assets/icon.ico",
+    page_icon=_icon,
     layout="wide"
 )
 
 def check_password():
-    """Returns `True` if the user had the correct password."""
+    """ユーザーのパスワードが正しい場合は `True` を返します。"""
+    
+    # 開発環境ではパスワード認証をスキップするオプション
+    if is_development_environment() and get_secret("skip_password", False):
+        return True
 
     def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store the password.
-        else:
+        """ユーザーが入力したパスワードが正しいか確認します。"""
+        # キーの存在確認
+        if "password" not in st.session_state:
+            st.session_state["password_correct"] = False
+            return
+        
+        # パスワードの取得と検証
+        stored_password = get_secret("password")
+        if not stored_password:
+            st.error("システム設定エラー: パスワードが設定されていません。")
+            st.info("管理者は「.streamlit/secrets.toml」ファイルまたはStreamlit Cloudのシークレット設定を確認してください。")
+            st.session_state["password_correct"] = False
+            logging.error("シークレット設定にパスワードが見つかりません。")
+            return
+        
+        # パスワードの比較
+        try:
+            if hmac.compare_digest(st.session_state["password"], stored_password):
+                st.session_state["password_correct"] = True
+                del st.session_state["password"]  # パスワードをセッションに保存しない
+            else:
+                st.session_state["password_correct"] = False
+        except Exception as e:
+            logging.error(f"パスワード認証中にエラーが発生: {str(e)}")
             st.session_state["password_correct"] = False
 
-    # Return True if the password is validated.
+    # パスワードが検証されている場合はTrueを返す
     if st.session_state.get("password_correct", False):
         return True
 
-    # Show input for password.
+    # シークレット設定の検証
+    errors = validate_secrets()
+    if errors:
+        for error_msg in errors.values():
+            st.error(error_msg)
+        if "secrets_error" in errors:
+            st.stop()
+    
+    # パスワード入力フォームを表示
     st.text_input(
-        "Password", type="password", on_change=password_entered, key="password"
+        "パスワード", type="password", on_change=password_entered, key="password"
     )
-    if "password_correct" in st.session_state:
-        st.error("😕 Password incorrect")
+    
+    if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+        st.error("😕 パスワードが正しくありません")
+    
     return False
 
 def main() -> None:
@@ -60,9 +101,12 @@ def main() -> None:
     アプリケーションのメインエントリーポイント。
     モジュール化されたStreamlitアプリケーションの各機能を呼び出し、連携させます。
     """
+    # ロギング設定
+    setup_logging()
+    
     # パスワード認証のチェック
     if not check_password():
-        st.stop()  # Do not continue if check_password is not True.
+        st.stop()  # 認証が成功しない場合は処理を続行しない
 
     # セッションステートの初期化 (コールバック関数を登録)
     init_session_state(
@@ -77,8 +121,9 @@ def main() -> None:
         st.session_state.scraper = ParallelScraper()
         st.session_state.scraper.set_progress_callback(progress_callback)
 
-    # ロギング設定
-    setup_logging()
+    # 設定情報のログ出力（開発環境のみ）
+    if is_development_environment():
+        logging.info("アプリケーション設定が正常に読み込まれました")
 
     # UIの表示 (ヘッダー)
     display_app_header()
