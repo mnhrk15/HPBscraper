@@ -22,28 +22,32 @@ class BeautyScraper:
             tel_url (str): 電話番号ページのURL
 
         Returns:
-            str: スクレイピングした電話番号
+            str: スクレイピングした電話番号、またはエラーを示す文字列
         """
         try:
             response = HTTPClient.get(tel_url)
-            if not response:
-                return "電話番号取得エラー"
+            if not response or not response.content:
+                logging.warning(f"電話番号ページの取得に失敗しました (レスポンスなしまたは空): {tel_url}")
+                return "電話番号ページ取得失敗"
 
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            for selector in PHONE_SELECTORS:
+            for selector_idx, selector in enumerate(PHONE_SELECTORS):
                 phone_element = soup.select_one(selector)
-                if phone_element and phone_element.text.strip():
-                    phone_number = phone_element.text.strip()
-                    logging.debug(f"電話番号を取得: {phone_number}")
-                    return phone_number
-
-            logging.warning(f"電話番号が見つかりませんでした: {tel_url}")
+                if phone_element:
+                    phone_text = phone_element.text.strip()
+                    if phone_text:
+                        logging.debug(f"電話番号を取得: {phone_text} (URL: {tel_url}, セレクタ: {selector})")
+                        return phone_text
+                    else:
+                        logging.debug(f"電話番号要素は存在しますがテキストが空です。URL: {tel_url}, セレクタ: {selector}")
+            
+            logging.warning(f"定義された全てのセレクタで電話番号が見つかりませんでした: {tel_url}, 使用セレクタ数: {len(PHONE_SELECTORS)}")
             return "電話番号情報なし"
 
         except Exception as e:
-            logging.error(f"電話番号スクレイピングエラー: {tel_url} - {e}")
-            return "電話番号スクレイピングエラー"
+            logging.error(f"電話番号スクレイピング中に予期せぬ例外が発生: {tel_url} - {e}", exc_info=True)
+            return "電話番号スクレイピング例外"
 
     @staticmethod
     def scrape_salon_details(salon_url: str) -> Optional[Dict]:
@@ -58,22 +62,35 @@ class BeautyScraper:
         """
         try:
             response = HTTPClient.get(salon_url)
-            if not response:
+            if not response or not response.content:
+                logging.warning(f"サロン詳細: HTTPレスポンスが空またはありません。URL: {salon_url}")
                 return None
 
             soup = BeautifulSoup(response.content, 'html.parser')
-            logging.debug(f"サロンページのHTMLを取得: {len(response.content)} bytes")
+            logging.debug(f"サロンページのHTMLを取得: {len(response.content)} bytes. URL: {salon_url}")
 
             # 店名の取得
-            name_element = soup.select_one(SALON_SELECTORS['name'])
-            name = name_element.text.strip() if name_element else "店名情報なし"
+            name = "店名情報なし"
+            name_selector = SALON_SELECTORS.get('name')
+            if name_selector:
+                name_element = soup.select_one(name_selector)
+                if name_element:
+                    name_text = name_element.text.strip()
+                    if name_text:
+                        name = name_text
+                    else:
+                        logging.warning(f"サロン詳細: 店名要素が見つかりましたがテキストが空です。URL: {salon_url}, セレクタ: {name_selector}")
+                else:
+                    logging.warning(f"サロン詳細: 店名要素が見つかりませんでした。URL: {salon_url}, セレクタ: {name_selector}")
+            else:
+                logging.warning(f"サロン詳細: 店名のセレクタがconfigに定義されていません。URL: {salon_url}")
 
             # データ初期化
             phone_number = "電話番号情報なし"
             address = "住所情報なし"
             staff_count = "スタッフ数情報なし"
 
-            # サロンデータの取得
+            # サロンデータの取得 (テーブル形式)
             all_rows = soup.find_all('tr')
             for row in all_rows:
                 label_element = row.find('th', class_='w120')
@@ -83,46 +100,82 @@ class BeautyScraper:
                 label_text = label_element.text.strip()
 
                 # 電話番号の処理
-                if "電話番号" in label_text:
-                    tel_element = row.find('td', {'colspan': '3'})
-                    if tel_element:
-                        tel_link = tel_element.find('a')
-                        if tel_link and 'href' in tel_link.attrs:
-                            tel_url = tel_link['href']
-                            phone_number = BeautyScraper.scrape_phone_number(tel_url)
-
+                if "電話番号" in label_text: # 正しいif条件に変更
+                    tel_td_element = row.find('td', {'colspan': '3'})
+                    if tel_td_element:
+                        tel_link_element = tel_td_element.find('a')
+                        if tel_link_element and tel_link_element.has_attr('href'):
+                            tel_url = tel_link_element['href']
+                            # scrape_phone_number の堅牢性は別途対応
+                            scraped_phone = BeautyScraper.scrape_phone_number(tel_url)
+                            if scraped_phone and scraped_phone not in ["電話番号情報なし", "電話番号取得エラー", "電話番号スクレイピングエラー"]:
+                                phone_number = scraped_phone
+                            elif scraped_phone:
+                                phone_number = scraped_phone # エラーメッセージをそのまま使う
+                        elif not tel_link_element:
+                            logging.warning(f"サロン詳細(表): 「電話番号」のtd内にリンク(aタグ)が見つかりませんでした。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                        elif not tel_link_element.has_attr('href'):
+                             logging.warning(f"サロン詳細(表): 「電話番号」のリンク(aタグ)にhref属性がありません。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                    else:
+                        logging.warning(f"サロン詳細(表): 「電話番号」のth要素に対するtd要素が見つかりませんでした。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                
                 # 住所の処理
                 elif "住所" in label_text:
                     addr_element = row.find('td', {'colspan': '3'})
                     if addr_element:
-                        address = addr_element.text.strip()
-
+                        extracted_address = addr_element.text.strip()
+                        if extracted_address:
+                            address = extracted_address
+                        else:
+                            logging.warning(f"サロン詳細(表): 「住所」のtd要素は存在しますが、テキストが空です。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                    else:
+                        logging.warning(f"サロン詳細(表): 「住所」のth要素に対するtd要素が見つかりませんでした。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                
                 # スタッフ数の処理
                 elif "スタッフ数" in label_text:
-                    staff_element = row.find('td', class_='w208 vaT')
+                    staff_element = row.find('td', class_='w208 vaT') # セレクタは既存のものを維持
                     if staff_element:
-                        staff_count = staff_element.text.strip()
+                        extracted_staff_count = staff_element.text.strip()
+                        if extracted_staff_count:
+                            staff_count = extracted_staff_count
+                        else:
+                            logging.warning(f"サロン詳細(表): 「スタッフ数」のtd要素は存在しますが、テキストが空です。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
+                    else:
+                        logging.warning(f"サロン詳細(表): 「スタッフ数」のth要素に対するtd要素が見つかりませんでした。URL: {salon_url}, 行HTML(一部): {str(row)[:150]}")
 
             # 関連リンクの取得
             links = []
-            links_element = soup.select(SALON_SELECTORS['links'])
-            if links_element:
-                links = [link.get('href') for link in links_element]
-            related_links = "\n".join(links)
-            related_links_count = len(links)
+            links_selector = SALON_SELECTORS.get('links')
+            if links_selector:
+                links_elements = soup.select(links_selector)
+                if links_elements:
+                    for link_el in links_elements:
+                        href = link_el.get('href')
+                        if href:
+                            links.append(normalize_url(href)) # URL正規化を追加
+                        else:
+                            logging.warning(f"サロン詳細: 関連リンク要素にhref属性がありません。URL: {salon_url}, 要素HTML(一部): {str(link_el)[:100]}")
+                # else: # links_elements が空の場合のログは、頻出する可能性があるのでDEBUGレベルかコメントアウト
+                    # logging.debug(f"サロン詳細: 関連リンク要素が見つかりませんでした（セレクタは存在）。URL: {salon_url}, セレクタ: {links_selector}")
+            else:
+                logging.debug(f"サロン詳細: 関連リンクのセレクタがconfigに定義されていません。URL: {salon_url}")
+            
+            valid_links = [l for l in links if l is not None] # normalize_urlがNoneを返す可能性も考慮
+            related_links_str = "\n".join(valid_links)
+            related_links_count = len(valid_links)
 
             return {
                 "サロン名": name,
                 "電話番号": phone_number,
                 "住所": address,
                 "スタッフ数": staff_count,
-                "関連リンク": related_links,
+                "関連リンク": related_links_str,
                 "関連リンク数": related_links_count,
                 "サロンURL": salon_url
             }
 
         except Exception as e:
-            logging.error(f"サロン詳細スクレイピングエラー: {salon_url} - {e}")
+            logging.error(f"サロン詳細スクレイピング中に予期せぬエラー: {salon_url} - {e}", exc_info=True) # スタックトレースも記録
             return None
 
     @staticmethod
@@ -167,13 +220,22 @@ class BeautyScraper:
             soup = BeautifulSoup(response.text, "html.parser")
             
             # 総ページ数を取得
-            pagination = soup.select_one('#mainContents div.preListHead div p.pa.bottom0.right0')
-            if not pagination:
-                last_page_num = 1
-            else:
-                pagination_text = pagination.text.strip()
-                match = re.search(r'/(\d+)ページ', pagination_text)
-                last_page_num = int(match.group(1)) if match else 1
+            last_page_num = 1 # デフォルト
+            try:
+                pagination_element_selector = '#mainContents div.preListHead div p.pa.bottom0.right0'
+                pagination = soup.select_one(pagination_element_selector)
+                if not pagination:
+                    logging.warning(f"ページネーション要素が見つかりませんでした。セレクタ: {pagination_element_selector}。1ページのみ処理します。")
+                else:
+                    pagination_text = pagination.text.strip()
+                    match = re.search(r'/(\d+)ページ', pagination_text)
+                    if match:
+                        last_page_num = int(match.group(1))
+                    else:
+                        logging.warning(f"ページネーションのテキストから総ページ数を抽出できませんでした。テキスト: '{pagination_text}'。1ページのみ処理します。")
+            except Exception as e_page_count:
+                logging.error(f"総ページ数取得中に予期せぬエラー: {e_page_count}")
+                # last_page_num はデフォルトの1のまま
             
             logging.info(f"ページ数: {last_page_num}")
 
@@ -201,23 +263,35 @@ class BeautyScraper:
                 soup = BeautifulSoup(response.text, "html.parser")
                 
                 # サロンURLを抽出
-                salon_items = soup.select('ul.slnCassetteList.mT20 > li')
-                for item in salon_items:
+                salon_list_selector = 'ul.slnCassetteList.mT20 > li'
+                salon_items = soup.select(salon_list_selector)
+                
+                if not salon_items and page_num < last_page_num : # 最終ページ以外でサロンが見つからない場合
+                    logging.warning(f"ページ {page_num} でサロンリストが見つかりませんでした。セレクタ: {salon_list_selector}")
+
+                for item_idx, item in enumerate(salon_items):
                     # 中断チェック
                     if should_stop and should_stop():
                         logging.info(f"処理がサロン取得中に中断されました (ページ {page_num})")
                         return salon_urls
 
-                    link = item.select_one('div.slnCassetteHeader h3.slnName a')
-                    if link and link.has_attr('href'):
-                        url = normalize_url(link['href'])
-                        if url and url not in salon_urls:
-                            salon_urls.append(url)
-                        logging.info(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)")
-                        # UIに進捗を表示 (URL単位のメッセージは頻繁すぎる可能性があるので、ページ単位のメッセージを優先)
-                        # with main_status_placeholder.container():
-                        #    st.info(f"{len(salon_urls)}件のサロンURLを収集中... (最後のURL: ...{url[-30:]})")
-                        # ページ単位の進捗バーは上で更新しているので、ここでは特に何もしない
+                    salon_link_selector = 'div.slnCassetteHeader h3.slnName a'
+                    link = None
+                    try:
+                        link = item.select_one(salon_link_selector)
+                        if link and link.has_attr('href'):
+                            url = normalize_url(link['href'])
+                            if url and url not in salon_urls:
+                                salon_urls.append(url)
+                            logging.debug(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)") # INFOからDEBUGに変更
+                        elif not link:
+                            logging.warning(f"ページ {page_num}, アイテム {item_idx+1} でサロンへのリンクが見つかりませんでした。セレクタ: {salon_link_selector}")
+                        elif not link.has_attr('href'):
+                            logging.warning(f"ページ {page_num}, アイテム {item_idx+1} のリンクにhref属性がありません。セレクタ: {salon_link_selector}, 要素: {str(link)[:100]}")
+
+                    except Exception as e_item:
+                        logging.error(f"ページ {page_num}, アイテム {item_idx+1} の処理中にエラー: {e_item}")
+                        logging.debug(f"エラー発生時のアイテムHTML (一部): {str(item)[:200]}")
 
                 # ページ間の待機時間
                 if page_num < last_page_num:

@@ -15,37 +15,54 @@ from config import MEMORY_EFFICIENT_MODE, MAX_CACHE_SIZE, GC_THRESHOLD, get_memo
 
 T = TypeVar('T')
 
+def _log_gc_details(log_prefix: str):
+    """GC実行前後の詳細情報をログに出力するヘルパー関数"""
+    stats_before = gc.get_stats()
+    counts_before = gc.get_count()
+    logging.info(f"{log_prefix} - Before GC - Counts (gen0,1,2): {counts_before}")
+    for i, s in enumerate(stats_before):
+        logging.info(f"{log_prefix} - Before GC - Gen {i} Stats: collections={s['collections']}, collected={s['collected']}, uncollectable={s['uncollectable']}")
+
+    collected_count = gc.collect() # GCを実行
+
+    stats_after = gc.get_stats()
+    counts_after = gc.get_count()
+    logging.info(f"{log_prefix} - After GC - Objects Collected: {collected_count}")
+    logging.info(f"{log_prefix} - After GC - Counts (gen0,1,2): {counts_after}")
+    for i, s in enumerate(stats_after):
+        logging.info(f"{log_prefix} - After GC - Gen {i} Stats: collections={s['collections']}, collected={s['collected']}, uncollectable={s['uncollectable']}")
+    return collected_count
+
 class MemoryMonitor:
     """メモリ使用量を監視するクラス"""
     
-    def __init__(self, threshold_percent: float = 80.0):
+    def __init__(self, threshold_percent: float = 80.0, cache_log_interval_sec: int = 60):
         """
         メモリモニターを初期化します。
         
         Args:
             threshold_percent: 警告を出す使用率のしきい値（％）
+            cache_log_interval_sec: キャッシュ統計情報をログ出力する間隔（秒）
         """
         self.threshold_percent = threshold_percent
         self.last_check_time = 0
-        self.check_interval = 5  # 秒単位でのチェック間隔
+        self.check_interval = 5  # 秒単位でのメモリチェック間隔
+        self.last_cache_log_time = 0
+        self.cache_log_interval = cache_log_interval_sec
     
     def check_memory_usage(self, force: bool = False) -> Dict[str, Any]:
         """
-        現在のメモリ使用状況をチェックします。
-        頻繁なチェックを避けるため、一定間隔でのみチェックします。
-        
-        Args:
-            force: 間隔に関わらず強制的にチェックする場合はTrue
-            
-        Returns:
-            Dict: メモリ使用情報を含む辞書
+        現在のメモリ使用状況をチェックし、必要に応じてキャッシュ統計もログ出力します。
         """
         current_time = time.time()
-        if not force and (current_time - self.last_check_time) < self.check_interval:
+        perform_check = force or (current_time - self.last_check_time) >= self.check_interval
+
+        if not perform_check:
             return {}
             
         self.last_check_time = current_time
-        
+        memory_info = {}
+
         try:
             memory = psutil.virtual_memory()
             memory_info = {
@@ -58,15 +75,21 @@ class MemoryMonitor:
             
             if memory_info["is_critical"]:
                 logging.warning(f"メモリ使用率が高くなっています: {memory.percent:.1f}%")
-                # 明示的にガベージコレクションを実行
-                collected = gc.collect()
-                logging.info(f"ガベージコレクション実行: {collected}オブジェクト回収")
-                
-            return memory_info
-            
+                _log_gc_details(f"MemoryMonitor Critical GC (Usage: {memory.percent:.1f}%)")
+
         except Exception as e:
-            logging.error(f"メモリ使用状況のチェック中にエラーが発生: {e}")
-            return {"error": str(e), "is_critical": False}
+            logging.error(f"メモリ使用状況のチェック中にエラーが発生: {e}", exc_info=True)
+            memory_info = {"error": str(e), "is_critical": False}
+        
+        # キャッシュ統計のログ出力
+        if (current_time - self.last_cache_log_time) >= self.cache_log_interval:
+            if 'url_cache' in globals() and isinstance(url_cache, LRUCache):
+                url_cache.log_stats()
+            if 'data_cache' in globals() and isinstance(data_cache, LRUCache):
+                data_cache.log_stats()
+            self.last_cache_log_time = current_time
+            
+        return memory_info
     
     def optimize_if_needed(self) -> bool:
         """
@@ -75,12 +98,9 @@ class MemoryMonitor:
         Returns:
             bool: 最適化を実行した場合はTrue
         """
-        memory_info = self.check_memory_usage()
-        if memory_info.get("is_critical", False):
-            # メモリ最適化処理
-            gc.collect()
-            return True
-        return False
+        memory_info = self.check_memory_usage(force=True) # 強制チェックでGCやキャッシュログも考慮
+        # is_critical時のGCはcheck_memory_usage内で行われる
+        return memory_info.get("is_critical", False)
 
 
 class LRUCache(Generic[T]):
@@ -89,31 +109,32 @@ class LRUCache(Generic[T]):
     最大サイズを超えた場合に、最も長く使われていないアイテムを削除します。
     """
     
-    def __init__(self, max_size: int = MAX_CACHE_SIZE):
+    def __init__(self, name: str, max_size: int = MAX_CACHE_SIZE):
         """
         キャッシュを初期化します。
         
         Args:
+            name: キャッシュの名称（ログ出力用）
             max_size: キャッシュの最大サイズ
         """
+        self.name = name
         self.cache = OrderedDict()
         self.max_size = max_size
+        self.hits = 0
+        self.misses = 0
     
     def get(self, key: str) -> Optional[T]:
         """
         キャッシュからアイテムを取得します。
         取得したアイテムは最も最近使用されたアイテムとして順序が更新されます。
-        
-        Args:
-            key: キャッシュキー
-            
-        Returns:
-            キャッシュされた値またはNone
         """
         if key not in self.cache:
+            self.misses += 1
+            logging.debug(f"LRUCache MISS: key='{key}' CacheName='{self.name}'")
             return None
             
-        # キーが存在する場合、最近使用したアイテムとして順序を更新
+        self.hits += 1
+        logging.debug(f"LRUCache HIT: key='{key}' CacheName='{self.name}'")
         value = self.cache.pop(key)
         self.cache[key] = value
         return value
@@ -121,70 +142,65 @@ class LRUCache(Generic[T]):
     def put(self, key: str, value: T) -> None:
         """
         アイテムをキャッシュに追加します。
-        
-        Args:
-            key: キャッシュキー
-            value: キャッシュする値
         """
-        # 既存のキーの場合は削除して再追加
         if key in self.cache:
             self.cache.pop(key)
         
-        # サイズ制限を超える場合は、最も古いアイテムを削除
-        if len(self.cache) >= self.max_size:
+        if len(self.cache) >= self.max_size and self.max_size > 0:
             self.cache.popitem(last=False)
             
-        self.cache[key] = value
+        if self.max_size > 0: # max_sizeが0の場合はキャッシュ無効として何も追加しない
+             self.cache[key] = value
     
     def clear(self) -> None:
-        """キャッシュをクリアします。"""
+        """キャッシュをクリアし、統計情報もリセットします。"""
         self.cache.clear()
+        self.hits = 0
+        self.misses = 0
+        logging.info(f"LRUCache CLEARED: CacheName='{self.name}'")
     
     def __len__(self) -> int:
         """キャッシュ内のアイテム数を返します。"""
         return len(self.cache)
 
+    def log_stats(self) -> None:
+        """キャッシュの現在の統計情報をログに出力します。"""
+        total_accesses = self.hits + self.misses
+        hit_rate = (self.hits / total_accesses * 100) if total_accesses > 0 else 0
+        logging.info(f"LRUCache Stats for '{self.name}': Size={len(self.cache)}/{self.max_size}, Hits={self.hits}, Misses={self.misses}, HitRate={hit_rate:.2f}%")
+
 
 def chunk_processor(chunk_size: int = 100):
     """
     大量のデータを処理する関数をチャンク単位で処理するデコレータ。
-    
-    Args:
-        chunk_size: 一度に処理するアイテム数
-        
-    Returns:
-        デコレータ関数
     """
     def decorator(func: Callable):
         @wraps(func)
         def wrapper(items, *args, **kwargs):
             if not items or len(items) <= chunk_size or not MEMORY_EFFICIENT_MODE:
-                # 少量のデータやメモリ効率モードが無効の場合は通常処理
                 return func(items, *args, **kwargs)
             
-            # 大量データの場合はチャンク処理
             results = []
             item_count = len(items)
             chunks = [items[i:i + chunk_size] for i in range(0, item_count, chunk_size)]
             
-            monitor = MemoryMonitor()
+            # このデコレータ内でmonitorインスタンスを生成するのではなく、グローバルインスタンスを使用
+            # monitor = MemoryMonitor() 
+            global memory_monitor # グローバルインスタンスを使用することを明示
+
             logging.info(f"チャンク処理を開始: 合計{item_count}アイテムを{len(chunks)}チャンクに分割")
             
             for i, chunk in enumerate(chunks):
-                # メモリ使用状況をチェック
-                monitor.optimize_if_needed()
+                memory_monitor.optimize_if_needed() # グローバルインスタンスのメソッドを呼び出し
                 
-                # チャンクを処理
                 chunk_result = func(chunk, *args, **kwargs)
                 results.extend(chunk_result if isinstance(chunk_result, list) else [chunk_result])
                 
-                # 進捗ログ
                 if (i + 1) % 5 == 0 or (i + 1) == len(chunks):
                     logging.info(f"チャンク処理進捗: {i + 1}/{len(chunks)} ({((i + 1) / len(chunks) * 100):.1f}%)")
                 
-                # 大きなチャンク処理後に明示的にガベージコレクション
-                if (i + 1) % 10 == 0:
-                    gc.collect()
+                if (i + 1) % 10 == 0: # 10チャンクごとにGC
+                    _log_gc_details(f"ChunkProcessor Periodic GC (Chunk {i+1}/{len(chunks)}) (Items: {len(chunk)} in chunk)")
             
             return results
         
@@ -194,11 +210,11 @@ def chunk_processor(chunk_size: int = 100):
 
 
 # アプリケーション全体で使用するメモリモニターインスタンス
-memory_monitor = MemoryMonitor()
+memory_monitor = MemoryMonitor(cache_log_interval_sec=60) # キャッシュログ間隔を指定
 
 # グローバルLRUキャッシュインスタンス
-url_cache = LRUCache[str](max_size=MAX_CACHE_SIZE)
-data_cache = LRUCache[Dict](max_size=MAX_CACHE_SIZE // 2)  # データはサイズが大きいため、少なめに設定
+url_cache = LRUCache[str](name="URL Cache", max_size=MAX_CACHE_SIZE)
+data_cache = LRUCache[Dict](name="Data Cache", max_size=MAX_CACHE_SIZE // 2)
 
 
 def optimize_memory(force: bool = False) -> None:
