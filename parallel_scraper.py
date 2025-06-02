@@ -52,12 +52,32 @@ class ParallelScraper:
     def __del__(self):
         """デストラクタ: リソースのクリーンアップを行う"""
         try:
-            if self._executor:
-                self._executor.shutdown(wait=False)  # 実行中のタスクを待たずにシャットダウン
+            # 処理中のタスクを中断
+            if hasattr(self, '_stop_event') and self._stop_event:
+                self._stop_event.set()
+                
+            # 実行中のタスクを完了させてからシャットダウン
+            if hasattr(self, '_executor') and self._executor:
+                logging.info("スレッドプールの安全な終了処理を実行中...")
+                # グレースフルシャットダウン - wait=Trueでタスク完了を待つ
+                self._executor.shutdown(wait=True)
+                logging.info("スレッドプール終了処理完了")
+                
             # 明示的にメモリオプティマイズを呼び出す
-            optimize_memory(force=True)
+            if 'optimize_memory' in globals():
+                optimize_memory(force=True)
+                
+        except (TypeError, AttributeError) as e:
+            # 初期化が完了していない場合のエラーは無視
+            pass
         except Exception as e:
             logging.error(f"リソースの解放中にエラーが発生: {e}")
+            # エラーがあっても可能な限りリソースを解放
+            try:
+                if hasattr(self, '_executor') and self._executor:
+                    self._executor.shutdown(wait=False)
+            except:
+                pass
 
     def stop(self):
         """スクレイピング処理を中断"""
@@ -297,21 +317,41 @@ class ParallelScraper:
         scraper = BeautyScraper()
 
         try:
-            # メモリ使用量の最適化のためにキャッシュの事前確認
-            if self._memory_efficient and len(salon_urls) > 100:
+            # 処理前にメモリ使用状況をチェックし記録
+            start_memory = memory_monitor.check_memory_usage(force=True)
+            if start_memory:
+                logging.info(f"処理開始時メモリ使用量: {start_memory.get('percent', 0):.1f}%")
+            
+            # 大量データ処理時の最適化
+            large_data_set = len(salon_urls) > 100
+            if self._memory_efficient and large_data_set:
+                # 事前に強制的にメモリをクリーンアップ
                 logging.info(f"大量データ処理モードを有効化: {len(salon_urls)}件")
                 optimize_memory(force=True)
+                gc.collect()
             
             with tqdm(total=len(salon_urls), desc="サロン情報取得") as progress_bar:
-                # バッチサイズを動的に調整
-                batch_size = min(CHUNK_SIZE * 2, max(CHUNK_SIZE, len(salon_urls) // MAX_WORKERS))
+                # メモリ使用量に基づいて動的にバッチサイズを調整
+                memory_info = memory_monitor.check_memory_usage()
+                memory_percent = memory_info.get('percent', 50) if memory_info else 50
+                
+                # メモリ使用量が高い場合はより小さいバッチサイズを使用
+                adaptive_factor = max(0.5, 1.0 - (memory_percent / 100))
+                batch_size = int(min(CHUNK_SIZE * 2, max(10, CHUNK_SIZE * adaptive_factor, len(salon_urls) // MAX_WORKERS)))
+                
+                logging.info(f"適応型バッチサイズ: {batch_size} (メモリ使用率: {memory_percent:.1f}%)")
                 salon_batches = [salon_urls[i:i + batch_size] for i in range(0, len(salon_urls), batch_size)]
                 
-                for batch in salon_batches:
+                # バッチ処理をループで実行
+                for i, batch in enumerate(salon_batches):
                     if self._should_stop():
+                        logging.info("ユーザーによる処理中断を検出しました")
                         break
                     
                     # 各バッチを並列処理
+                    logging.debug(f"バッチ処理開始 {i+1}/{len(salon_batches)} (サイズ: {len(batch)})")
+                    
+                    # futures辞書を各バッチのタスクで正しく初期化
                     futures = {
                         self._executor.submit(
                             self._scrape_salon_with_retry, scraper, url
@@ -334,13 +374,50 @@ class ParallelScraper:
                             self._update_progress(progress_bar, success=False)
                     
                     # バッチ処理後にメモリ最適化
-                    if self._memory_efficient and len(batch) > 50:
-                        optimize_memory()
+                    # 一時変数を明示的にクリア
+                    batch_results = []
+                    for result in futures.values():
+                        result = None  # 参照を明示的に解放
+                    
+                    # 不要な参照をクリア
+                    futures.clear()
+                    futures = None
+                    
+                    # メモリ使用量が多い場合は強制的に最適化
+                    if self._memory_efficient and len(batch) > 50: # 大きなバッチを処理した場合のみ
+                        optimize_memory(force=True)
+                        # 明示的にGCを呼び出す (ただし頻度を考慮)
+                        if i % 5 == 0: # 例えば5バッチごとにGCを実行
+                           gc.collect()
+                        
+                    # メモリ使用状況のログ出力 (頻度を調整)
+                    if self._memory_efficient and i % 5 == 0:
+                        memory_info = memory_monitor.check_memory_usage(force=True)
+                        if memory_info:
+                            logging.info(f"メモリ使用状況: {memory_info.get('percent', 0):.1f}% (バッチ {i+1}/{len(salon_batches)})")
 
         finally:
+            # 終了処理
             self._is_processing = False
             self._stop_event.clear()
+            
+            # メモリ使用状況の確認と記録
+            end_memory = memory_monitor.check_memory_usage(force=True)
+            if start_memory and end_memory:
+                start_percent = start_memory.get('percent', 0)
+                end_percent = end_memory.get('percent', 0)
+                diff = end_percent - start_percent
+                logging.info(f"メモリ使用量変化: {start_percent:.1f}% → {end_percent:.1f}% (差分: {diff:+.1f}%)")
+            
+            # 最終的な結果レポート
             logging.info(f"スクレイピング完了: 合計{len(results)}/{self._total_urls}件 (成功: {self._success_count}, エラー: {self._error_count})")
+            
+            # 明示的なメモリ最適化
+            optimize_memory(force=True)
+            gc.collect()
+            
+            # 参照の解放
+            scraper = None
 
         return results
 

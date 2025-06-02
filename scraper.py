@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from http_client import HTTPClient
 from url_utils import normalize_url
 from config import PHONE_SELECTORS, SCRAPING_DELAY, SALON_SELECTORS
+import streamlit as st
 
 class BeautyScraper:
     @staticmethod
@@ -125,7 +126,7 @@ class BeautyScraper:
             return None
 
     @staticmethod
-    def scrape_salon_urls(area_url: str, should_stop: Callable[[], bool] = None) -> List[str]:
+    def scrape_salon_urls(area_url: str, should_stop: Callable[[], bool] = None, progress_placeholder=None) -> List[str]:
         """
         エリアページからサロンURLをスクレイピング
 
@@ -137,10 +138,25 @@ class BeautyScraper:
             List[str]: サロンURLのリスト
         """
         salon_urls = []
+        # StreamlitのUI要素のためのプレースホルダーを作成
+        if progress_placeholder is None:
+            # 呼び出し元で指定されなかった場合、ここで作成
+            # ただし、このメソッドが複数回呼び出される場合、UIが重複する可能性あり
+            # 本来は呼び出し元でプレースホルダーを管理するのが望ましい
+            main_status_placeholder = st.empty()
+            progress_bar_placeholder = st.empty()
+        else:
+            main_status_placeholder = progress_placeholder.get("main_status", st.empty())
+            progress_bar_placeholder = progress_placeholder.get("progress_bar", st.empty())
+
         try:
+            with main_status_placeholder.container():
+                st.info(f"エリアURLからサロン情報を収集中です: {area_url}")
+            
             # 中断チェック
             if should_stop and should_stop():
-                logging.info("URL収集を開始前に中断されました")
+                logging.info("処理が中断されました。")
+                main_status_placeholder.empty() # スピナーをクリア
                 return salon_urls
 
             # 最初のページを取得
@@ -164,7 +180,7 @@ class BeautyScraper:
             for page_num in range(1, last_page_num + 1):
                 # 中断チェック
                 if should_stop and should_stop():
-                    logging.info(f"URL収集がページ {page_num} で中断されました")
+                    logging.info(f"処理がページ {page_num} で中断されました")
                     break
 
                 page_url = area_url
@@ -172,6 +188,10 @@ class BeautyScraper:
                     page_url = f"{area_url}PN{page_num}.html?searchGender=ALL"
                 
                 logging.info(f"ページ {page_num}/{last_page_num} を処理中: {page_url}")
+                with main_status_placeholder.container():
+                    st.info(f"ページ {page_num}/{last_page_num} を収集中 ({page_url})...")
+                if last_page_num > 0:
+                    progress_bar_placeholder.progress(page_num / last_page_num)
                 
                 # ページコンテンツを取得
                 response = HTTPClient.get(page_url)
@@ -185,7 +205,7 @@ class BeautyScraper:
                 for item in salon_items:
                     # 中断チェック
                     if should_stop and should_stop():
-                        logging.info(f"URL収集がサロン取得中に中断されました (ページ {page_num})")
+                        logging.info(f"処理がサロン取得中に中断されました (ページ {page_num})")
                         return salon_urls
 
                     link = item.select_one('div.slnCassetteHeader h3.slnName a')
@@ -193,7 +213,11 @@ class BeautyScraper:
                         url = normalize_url(link['href'])
                         if url and url not in salon_urls:
                             salon_urls.append(url)
-                            logging.info(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)")
+                        logging.info(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)")
+                        # UIに進捗を表示 (URL単位のメッセージは頻繁すぎる可能性があるので、ページ単位のメッセージを優先)
+                        # with main_status_placeholder.container():
+                        #    st.info(f"{len(salon_urls)}件のサロンURLを収集中... (最後のURL: ...{url[-30:]})")
+                        # ページ単位の進捗バーは上で更新しているので、ここでは特に何もしない
 
                 # ページ間の待機時間
                 if page_num < last_page_num:
@@ -202,5 +226,22 @@ class BeautyScraper:
         except Exception as e:
             logging.error(f"URL収集中にエラーが発生: {str(e)}")
             logging.exception(e)  # スタックトレースを出力
-        
+            with main_status_placeholder.container():
+                st.error(f"URL収集中にエラーが発生しました: {e}")
+        finally:
+            # 処理完了後、UI要素をクリアまたは最終状態を表示
+            with main_status_placeholder.container():
+                if salon_urls: # URLが1件以上収集できた場合
+                    st.success(f"サロンURL収集完了。合計: {len(salon_urls)}件")
+                elif area_url: # URLが収集できず、エリアURLが指定されていた場合
+                    st.warning(f"指定されたエリア ({area_url}) からサロンURLが見つかりませんでした。URLが正しいか、サイトの構造が変わっていないか確認してください。")
+                else: # その他の場合 (エラーなど)
+                    st.info("URL収集処理が終了しました。")
+            
+            # 進捗バーを完了状態にするかクリア
+            if last_page_num > 0 and len(salon_urls) > 0 : # 正常に収集できた場合
+                 progress_bar_placeholder.progress(1.0)
+            else: # エラー時や収集できなかった場合はクリア
+                 progress_bar_placeholder.empty()
+
         return salon_urls
