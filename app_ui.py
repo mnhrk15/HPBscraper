@@ -241,10 +241,11 @@ def display_main_ui(is_processing: bool, should_stop: bool) -> None:
     col1, col2 = st.columns([1, 1])
     
     with col1:
+        # 処理中または中断中/中断直後の場合は開始ボタンを無効化
         if st.button(
             "スクレイピング開始",
             type="primary",
-            disabled=is_processing,
+            disabled=is_processing or should_stop,  # 中断中/中断直後も無効化
             key="start_button",
             use_container_width=True,
             on_click=st.session_state.handle_start_callback # コールバック関数を使用

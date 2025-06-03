@@ -80,16 +80,41 @@ class ParallelScraper:
                 pass
 
     def stop(self):
-        """スクレイピング処理を中断"""
+        """スクレイピング処理を中断
+        処理中のタスクを可能な限り速やかに停止します。
+        """
+        # 中断フラグを設定
         self._stop_event.set()
         self._is_processing = False
+        
+        # 実行中のタスクが中断フラグを確認する時間を与える
+        # 最大3回試行して中断を確実にする
+        for attempt in range(3):
+            if not hasattr(self, '_executor') or self._executor._shutdown:
+                break
+                
+            # 現在のタスクが中断フラグを確認する時間を与える
+            time.sleep(0.1)
+            
+            # 実行中のタスクの状態を確認
+            logging.debug(f"中断処理試行 {attempt+1}/3")
+        
         logging.info("スクレイピング処理を中断しました")
+        
         # 処理中断時にメモリ最適化を実行
         optimize_memory()
 
     def reset(self):
-        """状態をリセット"""
+        """状態を完全にリセット
+        処理状態、フラグ、カウンターなど全ての内部状態を初期化します。
+        スクレイピングを新規に開始する前に呼び出すことで、前回の処理の影響を受けないようにします。
+        """
+        # 中断関連フラグをリセット
         self._stop_event.clear()
+        if hasattr(self, '_logged_stop'):
+            delattr(self, '_logged_stop')
+        
+        # カウンターと状態をリセット
         self._total_urls = 0
         self._processed_urls = 0
         self._success_count = 0
@@ -98,17 +123,42 @@ class ParallelScraper:
         self._is_processing = False
         self._last_gc_count = 0
         
-        # メモリ最適化を実行
+        # メモリ最適化を強制実行
         optimize_memory(force=True)
-        logging.info("スクレイピング状態をリセットしました")
+        
+        # 明示的にガベージコレクションを実行
+        gc.collect()
+        
+        logging.info("スクレイピング状態を完全にリセットしました")
 
     def set_progress_callback(self, callback: Callable):
         """進捗コールバックを設定"""
         self._progress_callback = callback
 
     def _should_stop(self) -> bool:
-        """中断すべきかどうかを判定"""
-        return self._stop_event.is_set() or not self._is_processing
+        """中断すべきかどうかを判定
+        
+        Returns:
+            bool: 中断すべき場合はTrue、継続すべき場合はFalse
+        """
+        # 以下の条件のいずれかに該当する場合は中断する
+        # 1. 明示的に中断フラグが設定されている
+        # 2. 処理中フラグがオフになっている
+        # 3. ThreadPoolExecutorがシャットダウンされている
+        is_executor_shutdown = hasattr(self, '_executor') and getattr(self._executor, '_shutdown', False)
+        
+        should_stop = (
+            self._stop_event.is_set() or 
+            not self._is_processing or
+            is_executor_shutdown
+        )
+        
+        # 中断フラグが新たに検出された場合はログ出力
+        if should_stop and not hasattr(self, '_logged_stop') and not getattr(self, '_logged_stop', False):
+            self._logged_stop = True
+            logging.info("中断フラグを検出しました。処理を停止します。")
+            
+        return should_stop
 
     def _calculate_eta(self) -> str:
         """残り時間を計算"""

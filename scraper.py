@@ -190,19 +190,22 @@ class BeautyScraper:
         Returns:
             List[str]: サロンURLのリスト
         """
+        # デフォルト値とエラー状態対応のための初期化
         salon_urls = []
+        last_page_num = 1  # 最初から変数を初期化
+        
         # StreamlitのUI要素のためのプレースホルダーを作成
         if progress_placeholder is None:
             # 呼び出し元で指定されなかった場合、ここで作成
-            # ただし、このメソッドが複数回呼び出される場合、UIが重複する可能性あり
-            # 本来は呼び出し元でプレースホルダーを管理するのが望ましい
             main_status_placeholder = st.empty()
             progress_bar_placeholder = st.empty()
         else:
             main_status_placeholder = progress_placeholder.get("main_status", st.empty())
             progress_bar_placeholder = progress_placeholder.get("progress_bar", st.empty())
 
+        # メソッド全体を大きなtry-exceptで囲み、どのような状況でもエラーが伝搬しないようにする
         try:
+            # ステータス表示
             with main_status_placeholder.container():
                 st.info(f"エリアURLからサロン情報を収集中です: {area_url}")
             
@@ -213,14 +216,34 @@ class BeautyScraper:
                 return salon_urls
 
             # 最初のページを取得
-            response = HTTPClient.get(area_url)
-            if not response or not response.text:
+            response = None
+            try:
+                response = HTTPClient.get(area_url)
+            except Exception as e:
+                logging.error(f"エリアURLへのアクセス中にエラー: {str(e)}")
+                main_status_placeholder.warning(f"指定されたエリア ({area_url}) へのアクセス中にエラーが発生しました。")
+                return salon_urls
+                
+            if not response:
+                logging.error(f"指定されたエリアURLにアクセスできませんでした: {area_url}")
+                main_status_placeholder.warning(f"指定されたエリア ({area_url}) からサロンURLが見つかりませんでした。URLが正しいか、サイトの構造が変わっていないか確認してください。")
+                return salon_urls
+        
+            if not response.text:
+                logging.error(f"指定されたエリアURLのレスポンスが空でした: {area_url}")
+                main_status_placeholder.warning(f"このエリアで有効なサロンURLが見つかりませんでした。")
                 return salon_urls
 
-            soup = BeautifulSoup(response.text, "html.parser")
+            # HTMLパース
+            soup = None
+            try:
+                soup = BeautifulSoup(response.text, "html.parser")
+            except Exception as e:
+                logging.error(f"HTMLパース中にエラー: {str(e)}")
+                main_status_placeholder.warning("ページデータの解析中にエラーが発生しました。")
+                return salon_urls
             
-            # 総ページ数を取得
-            last_page_num = 1 # デフォルト
+            # 総ページ数を取得 - 必ず1で初期化済み
             try:
                 pagination_element_selector = '#mainContents div.preListHead div p.pa.bottom0.right0'
                 pagination = soup.select_one(pagination_element_selector)
@@ -230,73 +253,95 @@ class BeautyScraper:
                     pagination_text = pagination.text.strip()
                     match = re.search(r'/(\d+)ページ', pagination_text)
                     if match:
-                        last_page_num = int(match.group(1))
+                        try:
+                            last_page_num = int(match.group(1))
+                        except (ValueError, TypeError):
+                            logging.warning(f"ページ番号の変換エラー: '{match.group(1)}'。1ページのみ処理します。")
+                            # last_page_numは既に1に初期化済み
                     else:
                         logging.warning(f"ページネーションのテキストから総ページ数を抽出できませんでした。テキスト: '{pagination_text}'。1ページのみ処理します。")
             except Exception as e_page_count:
                 logging.error(f"総ページ数取得中に予期せぬエラー: {e_page_count}")
-                # last_page_num はデフォルトの1のまま
+                # last_page_numは既に1に初期化済み
             
             logging.info(f"ページ数: {last_page_num}")
 
-            for page_num in range(1, last_page_num + 1):
-                # 中断チェック
-                if should_stop and should_stop():
-                    logging.info(f"処理がページ {page_num} で中断されました")
-                    break
-
-                page_url = area_url
-                if page_num > 1:
-                    page_url = f"{area_url}PN{page_num}.html?searchGender=ALL"
-                
-                logging.info(f"ページ {page_num}/{last_page_num} を処理中: {page_url}")
-                with main_status_placeholder.container():
-                    st.info(f"ページ {page_num}/{last_page_num} を収集中 ({page_url})...")
-                if last_page_num > 0:
-                    progress_bar_placeholder.progress(page_num / last_page_num)
-                
-                # ページコンテンツを取得
-                response = HTTPClient.get(page_url)
-                if not response or not response.text:
-                    continue
-
-                soup = BeautifulSoup(response.text, "html.parser")
-                
-                # サロンURLを抽出
-                salon_list_selector = 'ul.slnCassetteList.mT20 > li'
-                salon_items = soup.select(salon_list_selector)
-                
-                if not salon_items and page_num < last_page_num : # 最終ページ以外でサロンが見つからない場合
-                    logging.warning(f"ページ {page_num} でサロンリストが見つかりませんでした。セレクタ: {salon_list_selector}")
-
-                for item_idx, item in enumerate(salon_items):
+            try:
+                for page_num in range(1, last_page_num + 1):
                     # 中断チェック
                     if should_stop and should_stop():
-                        logging.info(f"処理がサロン取得中に中断されました (ページ {page_num})")
-                        return salon_urls
+                        logging.info(f"処理がページ {page_num} で中断されました")
+                        break
 
-                    salon_link_selector = 'div.slnCassetteHeader h3.slnName a'
-                    link = None
+                    page_url = area_url
+                    if page_num > 1:
+                        page_url = f"{area_url}PN{page_num}.html?searchGender=ALL"
+                    
+                    logging.info(f"ページ {page_num}/{last_page_num} を処理中: {page_url}")
+                    with main_status_placeholder.container():
+                        st.info(f"ページ {page_num}/{last_page_num} を収集中 ({page_url})...")
+                    if last_page_num > 0:
+                        progress_bar_placeholder.progress(page_num / last_page_num)
+                    
+                    # ページコンテンツを取得
+                    response = None
                     try:
-                        link = item.select_one(salon_link_selector)
-                        if link and link.has_attr('href'):
-                            url = normalize_url(link['href'])
-                            if url and url not in salon_urls:
-                                salon_urls.append(url)
-                            logging.debug(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)") # INFOからDEBUGに変更
-                        elif not link:
-                            logging.warning(f"ページ {page_num}, アイテム {item_idx+1} でサロンへのリンクが見つかりませんでした。セレクタ: {salon_link_selector}")
-                        elif not link.has_attr('href'):
-                            logging.warning(f"ページ {page_num}, アイテム {item_idx+1} のリンクにhref属性がありません。セレクタ: {salon_link_selector}, 要素: {str(link)[:100]}")
+                        response = HTTPClient.get(page_url)
+                    except Exception as e:
+                        logging.error(f"ページ取得中にエラー: {str(e)}")
+                        continue
+                        
+                    if not response or not response.text:
+                        logging.warning(f"ページ {page_num} のレスポンスが無効です")
+                        continue
 
-                    except Exception as e_item:
-                        logging.error(f"ページ {page_num}, アイテム {item_idx+1} の処理中にエラー: {e_item}")
-                        logging.debug(f"エラー発生時のアイテムHTML (一部): {str(item)[:200]}")
+                    soup = None
+                    try:
+                        soup = BeautifulSoup(response.text, "html.parser")
+                    except Exception as e:
+                        logging.error(f"ページ {page_num} のHTML解析中にエラー: {str(e)}")
+                        continue
+                    
+                    # サロンURLを抽出
+                    try:
+                        salon_list_selector = 'ul.slnCassetteList.mT20 > li'
+                        salon_items = soup.select(salon_list_selector)
+                        
+                        if not salon_items and page_num < last_page_num : # 最終ページ以外でサロンが見つからない場合
+                            logging.warning(f"ページ {page_num} でサロンリストが見つかりませんでした。セレクタ: {salon_list_selector}")
 
-                # ページ間の待機時間
-                if page_num < last_page_num:
-                    time.sleep(1)
+                        for item_idx, item in enumerate(salon_items):
+                            # 中断チェック
+                            if should_stop and should_stop():
+                                logging.info(f"処理がサロン取得中に中断されました (ページ {page_num})")
+                                return salon_urls
 
+                            salon_link_selector = 'div.slnCassetteHeader h3.slnName a'
+                            link = None
+                            try:
+                                link = item.select_one(salon_link_selector)
+                                if link and link.has_attr('href'):
+                                    url = normalize_url(link['href'])
+                                    if url and url not in salon_urls:
+                                        salon_urls.append(url)
+                                    logging.debug(f"サロンURL追加: {url} (合計: {len(salon_urls)}件)") # INFOからDEBUGに変更
+                            except Exception as e:
+                                logging.error(f"サロンURL取得中にエラー: {e}")
+                                continue
+                    except Exception as e:
+                        logging.error(f"ページ {page_num} のサロンリスト抽出中にエラー: {str(e)}")
+                        continue
+            except Exception as e:
+                logging.error(f"ページ処理中に予期せぬエラー: {str(e)}")
+            
+            # URLが取得できたかチェック
+            if not salon_urls:
+                logging.warning("サロンURLが見つかりませんでした。")
+                with main_status_placeholder.container():
+                    st.warning(f"指定されたエリア ({area_url}) からサロンURLが見つかりませんでした。URLが正しいか、サイトの構造が変わっていないか確認してください。")
+
+            return salon_urls
+                
         except Exception as e:
             logging.error(f"URL収集中にエラーが発生: {str(e)}")
             logging.exception(e)  # スタックトレースを出力
