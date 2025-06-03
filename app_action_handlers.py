@@ -52,12 +52,13 @@ def handle_start() -> None:
 def handle_stop() -> None:
     """
     スクレイピング処理の停止ハンドラー。
-    スクレイパーを停止させ、処理状態を更新し、UIを再描画します。
+    スクレイパーを停止させ、処理状態を更新します。
     確実な中断のために処理の終了を待機します。
     """
     if st.session_state.processing_state['is_processing']:
         try:
             # 中断処理開始を表示
+            logging.info("スクレイピング処理の中断を開始します")
             update_processing_state(
                 is_processing=True,  # まだ処理中だが中断フラグをセット
                 should_stop=True,
@@ -67,11 +68,14 @@ def handle_stop() -> None:
             
             # スクレイパーの中断メソッド呼び出し
             if hasattr(st.session_state, 'scraper'):
+                logging.info("スクレイパーのstopメソッドを呼び出します")
                 st.session_state.scraper.stop()
                 
                 # 中断が確実に完了するまで少し待機（必要に応じて調整）
                 import time
                 time.sleep(0.5)
+            else:
+                logging.warning("セッションにスクレイパーが存在しません。中断処理をスキップします。")
                 
             # 中断完了後に状態を更新
             update_processing_state(
@@ -83,10 +87,12 @@ def handle_stop() -> None:
             
             logging.info("スクレイピング処理が正常に中断されました")
             
-            # UIを強制的に更新
-            st.rerun()
+            # st.rerun()を使わずに状態更新のみ行う（Streamlitが自動的に再描画する）
         except Exception as e:
-            logging.error(f"中断処理中にエラーが発生: {str(e)}")
+            import traceback
+            error_details = traceback.format_exc()
+            logging.error(f"中断処理中にエラーが発生: {str(e)}\n{error_details}")
+            
             # エラー発生時も処理状態を中断完了に設定し、ボタンを有効化
             update_processing_state(
                 is_processing=False, 
@@ -94,9 +100,6 @@ def handle_stop() -> None:
                 status_message=f'中断処理中にエラーが発生: {str(e)}',
                 progress=0
             )
-            
-            # エラー発生時もUIを強制的に更新
-            st.rerun()
 
 def on_search_change() -> None:
     """
