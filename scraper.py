@@ -358,7 +358,7 @@ class BeautyScraper:
                     st.info("URL収集処理が終了しました。")
             
             # 進捗バーを完了状態にするかクリア
-            if last_page_num > 0 and len(salon_urls) > 0 : # 正常に収集できた場合
+            if 'last_page_num' in locals() and last_page_num > 0 and len(salon_urls) > 0 : # 正常に収集できた場合
                  progress_bar_placeholder.progress(1.0)
             else: # エラー時や収集できなかった場合はクリア
                  progress_bar_placeholder.empty()

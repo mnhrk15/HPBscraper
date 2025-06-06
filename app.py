@@ -149,6 +149,9 @@ def main() -> None:
 
     # メイン処理 (スクレイピング実行部分)
     if is_processing and not should_stop:
+        # 新しい処理の開始前に必ずスクレイパーの状態をリセット
+        st.session_state.scraper.reset()
+        
         try:
             if not selected_area or not selected_prefecture:
                 st.error("都道府県とエリアを選択してください。")
@@ -228,9 +231,6 @@ def main() -> None:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
 
-                    # スクレイパーの状態をリセット
-                    st.session_state.scraper.reset()
-
                     # 完了メッセージ
                     st.success(f"""
                         スクレイピングが完了しました！
@@ -260,6 +260,20 @@ def main() -> None:
             logging.error(f"Error during scraping: {str(e)}")
             st.error(error_message)
             st.rerun()
+
+    if 'processing_state' in st.session_state and st.session_state.processing_state['is_complete']:
+        salon_data = st.session_state.processing_state['salon_data']
+        if salon_data:
+            st.subheader("前回のスクレイピング結果")
+            display_salon_data(salon_data)
+            excel_bytes, file_name = ExcelExporter.get_excel_bytes(salon_data)
+            st.download_button(
+                label="Excelファイルをダウンロード",
+                data=excel_bytes,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_button_rerun" # ダウンロードボタンにユニークなキーを設定
+            )
 
 
 if __name__ == "__main__":
